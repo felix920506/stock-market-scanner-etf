@@ -326,21 +326,37 @@ def main():
                     '--max-news-articles', str(args.max_news_articles),
                 ]
 
-                scan_proc = subprocess.run(scan_cmd, capture_output=True, text=True)
+                # Stream stderr live so progress is visible, capture stdout for JSON
+                scan_proc = subprocess.Popen(
+                    scan_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stderr_lines = []
+                for line in scan_proc.stderr:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+                    stderr_lines.append(line)
+                stdout_data = scan_proc.stdout.read()
+                scan_proc.wait()
+
+                stderr_text = ''.join(stderr_lines)
                 with open(scan_stderr, 'w', encoding='utf-8') as f:
-                    f.write(scan_proc.stderr or '')
+                    f.write(stderr_text)
                 if scan_proc.returncode != 0:
-                    sys.stderr.write(scan_proc.stderr)
                     raise RuntimeError(f'scan_market.py failed with rc={scan_proc.returncode}. Artifacts: {tmpdir}')
 
                 with open(scan_json, 'w', encoding='utf-8') as f:
-                    f.write(scan_proc.stdout)
-                scan_output = json.loads(scan_proc.stdout)
+                    f.write(stdout_data)
+                scan_output = json.loads(stdout_data)
 
             if os.path.exists(report_txt):
+                print('Reusing existing report.', file=sys.stderr)
                 with open(report_txt, 'r', encoding='utf-8') as f:
                     report = f.read()
             else:
+                print('Building report...', file=sys.stderr)
                 report = build_report(scan_output)
                 with open(report_txt, 'w', encoding='utf-8') as f:
                     f.write(report)
@@ -349,10 +365,12 @@ def main():
             with open(report_txt, 'w', encoding='utf-8') as f:
                 f.write('\n\n--- chunk separator ---\n\n'.join(report_chunks))
 
+        print(f'Posting report to Discord ({len(report_chunks)} chunk(s))...', file=sys.stderr)
         delivery_logs = []
         for idx, chunk in enumerate(report_chunks, 1):
             try:
                 resp_body = send_discord_chunk(webhook_url, chunk)
+                print(f'  Chunk {idx}/{len(report_chunks)} sent.', file=sys.stderr)
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- OK\n{resp_body}')
             except RuntimeError as exc:
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- FAILED\n{exc}')
