@@ -247,20 +247,43 @@ def build_report(scan_output: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Deterministic market scanner runner with verified webhook delivery')
-    parser.add_argument('--top', type=int, default=10)
-    parser.add_argument('--min-score', type=int, default=3)
-    parser.add_argument('--max-candidates', type=int, default=80)
-    parser.add_argument('--max-news-articles', type=int, default=5)
-    parser.add_argument('--period', default='6mo')
-    parser.add_argument('--interval', default='1d')
-    parser.add_argument('--min-market-cap', type=float, default=1e10)
-    parser.add_argument('--watchlist', default='market-watchlist.md')
-    parser.add_argument('--temp-root', default='/tmp', help='Parent directory for run artifacts (default: /tmp)')
-    parser.add_argument('--keep-temp', action='store_true', help='Keep temp run directory after success')
-    parser.add_argument('--reuse-temp-dir', help='Reuse an existing temp run directory to skip completed stages')
-    parser.add_argument('--delivery-only', action='store_true', help='Skip scan/report generation and resend from an existing staged report')
+    parser = argparse.ArgumentParser(description='Market scanner — scans TW market and posts report to Discord')
+    parser.add_argument('--top',                  type=int,   default=10,             help='Number of top picks to include (default: 10)')
+    parser.add_argument('--min-score',            type=int,   default=3,              help='Minimum TA score to include (default: 3)')
+    parser.add_argument('--max-candidates',       type=int,   default=80,             help='Max tickers to analyse (default: 80)')
+    parser.add_argument('--min-market-cap',       type=float, default=1e10,           help='Minimum market cap in TWD (default: 10B)')
+    parser.add_argument('--period',               default='6mo',                      help='yfinance data period (default: 6mo)')
+    parser.add_argument('--interval',             default='1d',                       help='Bar interval (default: 1d)')
+    parser.add_argument('--watchlist',            default='market-watchlist.md',      help='Watchlist file to exclude (default: market-watchlist.md)')
+    parser.add_argument('--no-exclude-watchlist', action='store_true',                help='Include watchlist tickers instead of excluding them')
+    parser.add_argument('--history-path',         default=None,                       help='Custom path for recommendation history JSON')
+    parser.add_argument('--no-history',           action='store_true',                help='Disable history tracking for this run')
+    parser.add_argument('--enrich-news',          action='store_true',                help='Fetch news summaries for STRONG BUY picks')
+    parser.add_argument('--max-news-articles',    type=int,   default=5,              help='Max news articles per ticker (default: 5)')
+    parser.add_argument('--json',                 action='store_true', dest='as_json',help='Print scan output as JSON and exit without posting to Discord')
+    parser.add_argument('--temp-root',            default='/tmp',                     help='Parent directory for run artifacts (default: /tmp)')
+    parser.add_argument('--keep-temp',            action='store_true',                help='Keep temp directory after a successful run')
+    parser.add_argument('--reuse-temp-dir',                                           help='Reuse an existing temp directory to skip completed stages')
+    parser.add_argument('--delivery-only',        action='store_true',                help='Skip scan and resend an existing staged report')
     args = parser.parse_args()
+
+    if args.as_json:
+        scan_output = scan(
+            watchlist=args.watchlist,
+            top=args.top,
+            min_score=args.min_score,
+            min_market_cap=args.min_market_cap,
+            period=args.period,
+            interval=args.interval,
+            max_candidates=args.max_candidates,
+            history_path=args.history_path,
+            no_history=args.no_history,
+            enrich_news=args.enrich_news,
+            no_exclude_watchlist=args.no_exclude_watchlist,
+            max_news_articles=args.max_news_articles,
+        )
+        print(json.dumps(scan_output, indent=2, ensure_ascii=False))
+        return
 
     webhook_url = read_market_webhook_url()
 
@@ -304,7 +327,10 @@ def main():
                     period=args.period,
                     interval=args.interval,
                     max_candidates=args.max_candidates,
-                    enrich_news=True,
+                    history_path=args.history_path,
+                    no_history=args.no_history,
+                    enrich_news=args.enrich_news,
+                    no_exclude_watchlist=args.no_exclude_watchlist,
                     max_news_articles=args.max_news_articles,
                 )
                 with open(scan_json, 'w', encoding='utf-8') as f:

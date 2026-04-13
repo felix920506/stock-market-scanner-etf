@@ -1,22 +1,9 @@
-#!/usr/bin/env python3
 """
 Market Discovery Scanner
-Fetches candidate tickers from multiple screeners and ETF holdings,
-filters out the existing watchlist, runs TA on the remaining candidates,
-and ranks them by opportunity score.
 
-Uses the stock-ta skill's analyze() function for all technical analysis —
-single source of truth for indicators, scoring, and labels.
-
-Usage:
-    python3 scan_market.py [--watchlist PATH] [--top N] [--min-score N]
-                           [--period 6mo] [--interval 1d] [--max-candidates N]
-
-Dependencies: yfinance, pandas, ta
-Install:      pip install yfinance pandas ta
+Core scanning logic. Import and call scan() directly.
 """
 
-import argparse
 import json
 import os
 import subprocess
@@ -143,7 +130,7 @@ try:
     import yfinance as yf
     import pandas as pd
 except ImportError as e:
-    print(json.dumps({"error": f"Missing dependency: {e}. Run: pip install yfinance pandas ta"}))
+    print(json.dumps({"error": f"Missing dependency: {e}. Run: pip install -r requirements.txt"}))
     sys.exit(1)
 
 
@@ -351,38 +338,3 @@ def scan(
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Market Discovery Scanner")
-    parser.add_argument("--watchlist",           default="market-watchlist.md")
-    parser.add_argument("--top",                 type=int, default=10)
-    parser.add_argument("--min-score",           type=int, default=2)
-    parser.add_argument("--min-market-cap",      type=float, default=1e10)
-    parser.add_argument("--period",              default="6mo")
-    parser.add_argument("--interval",            default="1d")
-    parser.add_argument("--max-candidates",      type=int, default=80)
-    parser.add_argument("--history-path",        default=None)
-    parser.add_argument("--no-history",          action="store_true")
-    parser.add_argument("--enrich-news",         action="store_true")
-    parser.add_argument("--no-exclude-watchlist",action="store_true")
-    parser.add_argument("--max-news-articles",   type=int, default=5)
-    args = parser.parse_args()
-
-    output = scan(
-        watchlist=args.watchlist,
-        top=args.top,
-        min_score=args.min_score,
-        min_market_cap=args.min_market_cap,
-        period=args.period,
-        interval=args.interval,
-        max_candidates=args.max_candidates,
-        history_path=args.history_path,
-        no_history=args.no_history,
-        enrich_news=args.enrich_news,
-        no_exclude_watchlist=args.no_exclude_watchlist,
-        max_news_articles=args.max_news_articles,
-    )
-    print(json.dumps(output, indent=2))
-
-
-if __name__ == "__main__":
-    main()
