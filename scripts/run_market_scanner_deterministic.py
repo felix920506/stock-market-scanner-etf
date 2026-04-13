@@ -2,48 +2,48 @@
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
+import urllib.error
 from datetime import datetime
 
+# ── Load .env if present ──────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', '..'))
 SCAN_SCRIPT = os.path.join(SCRIPT_DIR, 'scan_market.py')
-WEBHOOK_SCRIPT = os.path.join(WORKSPACE, 'skills', 'discord-webhook', 'scripts', 'send_webhook.sh')
-TOOLS_MD = os.path.join(WORKSPACE, 'TOOLS.md')
 
 
 def read_market_webhook_url() -> str:
-    with open(TOOLS_MD, 'r', encoding='utf-8') as f:
-        text = f.read()
-    # Simple search for the URL line after the header
-    lines = text.splitlines()
-    found_header = False
-    for line in lines:
-        if line.strip() == "### Market Research":
-            found_header = True
-            continue
-        if found_header:
-            if line.startswith("### "): # Next section
-                break
-            if "Discord Webhook URL:" in line:
-                return line.split("Discord Webhook URL:")[1].strip()
-    
-    found_header = False
-    for line in lines:
-        if line.strip() == "### Discord":
-            found_header = True
-            continue
-        if found_header:
-            if line.startswith("### "):
-                break
-            if "Webhook URL:" in line:
-                return line.split("Webhook URL:")[1].strip()
-                
-    raise RuntimeError('Could not find Discord webhook URL in TOOLS.md')
+    url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not url:
+        raise RuntimeError("DISCORD_WEBHOOK_URL not set. Add it to .env or export it.")
+    return url
+
+
+def send_discord_chunk(webhook_url: str, content: str, thread_id: str = None) -> str:
+    """POST a single content chunk to a Discord webhook. Returns response body."""
+    payload = {"content": content}
+    if thread_id:
+        payload["thread_id"] = thread_id
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        webhook_url, data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read().decode()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise RuntimeError(f"Discord webhook HTTP {e.code}: {body[:500]}")
 
 
 def fmt_price(v):
@@ -253,7 +253,7 @@ def main():
     parser.add_argument('--period', default='6mo')
     parser.add_argument('--interval', default='1d')
     parser.add_argument('--min-market-cap', type=float, default=1e10)
-    parser.add_argument('--watchlist', default=os.path.join(WORKSPACE, 'market-watchlist.md'))
+    parser.add_argument('--watchlist', default='market-watchlist.md')
     parser.add_argument('--temp-root', default='/tmp', help='Parent directory for run artifacts (default: /tmp)')
     parser.add_argument('--keep-temp', action='store_true', help='Keep temp run directory after success')
     parser.add_argument('--reuse-temp-dir', help='Reuse an existing temp run directory to skip completed stages')
@@ -345,42 +345,23 @@ def main():
             with open(report_txt, 'w', encoding='utf-8') as f:
                 f.write('\n\n--- chunk separator ---\n\n'.join(report_chunks))
 
-        env = os.environ.copy()
-        env['WEBHOOK_URL'] = webhook_url
-        # Pass through THREAD_ID if set (posts into a Discord thread)
-        if os.environ.get('THREAD_ID'):
-            env['THREAD_ID'] = os.environ['THREAD_ID']
+        thread_id = os.environ.get('THREAD_ID') or None
 
-        stdout_logs = []
-        stderr_logs = []
+        delivery_logs = []
         for idx, chunk in enumerate(report_chunks, 1):
-            send_proc = subprocess.run([WEBHOOK_SCRIPT, chunk], capture_output=True, text=True, env=env)
-            stdout_logs.append(f'--- chunk {idx}/{len(report_chunks)} ---\n{send_proc.stdout or ""}')
-            stderr_logs.append(f'--- chunk {idx}/{len(report_chunks)} ---\n{send_proc.stderr or ""}')
-
-            if send_proc.returncode != 0:
+            try:
+                resp_body = send_discord_chunk(webhook_url, chunk, thread_id=thread_id)
+                delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- OK\n{resp_body}')
+            except RuntimeError as exc:
+                delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- FAILED\n{exc}')
                 with open(post_stdout, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(stdout_logs))
-                with open(post_stderr, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(stderr_logs))
-                sys.stderr.write(send_proc.stdout)
-                sys.stderr.write(send_proc.stderr)
-                raise RuntimeError(f'Webhook send failed on chunk {idx}/{len(report_chunks)} with rc={send_proc.returncode}. Artifacts: {tmpdir}')
-
-            stdout = (send_proc.stdout or '').strip()
-            stderr = (send_proc.stderr or '').strip()
-            if stdout or stderr:
-                with open(post_stdout, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(stdout_logs))
-                with open(post_stderr, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(stderr_logs))
-                combined = '\n'.join(x for x in [stdout, stderr] if x)
-                raise RuntimeError(f'Unexpected webhook response on chunk {idx}/{len(report_chunks)}: {combined}. Artifacts: {tmpdir}')
+                    f.write('\n'.join(delivery_logs))
+                open(post_stderr, 'w').close()
+                raise RuntimeError(f'Webhook send failed on chunk {idx}/{len(report_chunks)}: {exc}. Artifacts: {tmpdir}')
 
         with open(post_stdout, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(stdout_logs))
-        with open(post_stderr, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(stderr_logs))
+            f.write('\n'.join(delivery_logs))
+        open(post_stderr, 'w').close()
 
         print(f'Report posted successfully to Discord webhook in {len(report_chunks)} chunk(s). Artifacts: {tmpdir}')
     finally:

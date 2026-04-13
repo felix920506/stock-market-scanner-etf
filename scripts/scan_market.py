@@ -22,6 +22,16 @@ import os
 import sys
 import time
 import re
+import urllib.request
+import urllib.parse
+import urllib.error
+
+# ── Load .env if present (optional dependency) ────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── Import recommendation history tracker ─────────────────────────────────────
 from recommendation_history import record_recommendations, annotate_results
@@ -40,19 +50,28 @@ try:
 except ImportError:
     HAS_LLM_SUMMARIZE = False
 
-# ── Import analyze() from stock-ta skill ─────────────────────────────────────
-# Resolve path relative to this script's location
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_stock_ta_dir = os.path.join(_script_dir, "..", "..", "stock-ta", "scripts")
-_stock_ta_dir = os.path.normpath(_stock_ta_dir)
-sys.path.insert(0, _stock_ta_dir)
+# ── HTTP client for stock-ta ──────────────────────────────────────────────────
+# Connect to the stock-ta HTTP server instead of importing directly.
+# Set STOCK_TA_URL in .env or environment (default: http://localhost:8000).
+_STOCK_TA_URL = os.environ.get("STOCK_TA_URL", "http://localhost:8000").rstrip("/")
 
-try:
-    from analyze_stock import analyze
-except ImportError as e:
-    print(f"Error: Cannot import analyze_stock from {_stock_ta_dir}: {e}", file=sys.stderr)
-    print("Ensure the stock-ta skill is installed at skills/stock-ta/", file=sys.stderr)
-    sys.exit(1)
+
+def analyze(ticker: str, period: str = "6mo", interval: str = "1d") -> dict:
+    """Call stock-ta /analyze endpoint and return result dict."""
+    params = urllib.parse.urlencode({"ticker": ticker, "period": period, "interval": interval})
+    url = f"{_STOCK_TA_URL}/analyze?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            return json.loads(body)
+        except Exception:
+            return {"error": f"HTTP {e.code}: {body[:200]}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 try:
     import yfinance as yf
