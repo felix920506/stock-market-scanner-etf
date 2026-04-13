@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -326,7 +327,10 @@ def main():
                     '--max-news-articles', str(args.max_news_articles),
                 ]
 
-                # Stream stderr live so progress is visible, capture stdout for JSON
+                # Stream stderr live while capturing stdout for JSON.
+                # Both pipes are drained concurrently to avoid a deadlock:
+                # if stdout fills the pipe buffer the child blocks writing,
+                # and if the parent is blocked reading stderr neither can proceed.
                 scan_proc = subprocess.Popen(
                     scan_cmd,
                     stdout=subprocess.PIPE,
@@ -334,11 +338,17 @@ def main():
                     text=True,
                 )
                 stderr_lines = []
-                for line in scan_proc.stderr:
-                    sys.stderr.write(line)
-                    sys.stderr.flush()
-                    stderr_lines.append(line)
+
+                def _stream_stderr():
+                    for line in scan_proc.stderr:
+                        sys.stderr.write(line)
+                        sys.stderr.flush()
+                        stderr_lines.append(line)
+
+                stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
+                stderr_thread.start()
                 stdout_data = scan_proc.stdout.read()
+                stderr_thread.join()
                 scan_proc.wait()
 
                 stderr_text = ''.join(stderr_lines)
