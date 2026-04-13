@@ -46,7 +46,6 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
 To start the stock-ta HTTP server:
 
 ```bash
-cd https://github.com/felix920506/stock-ta
 python server.py --port 8000
 ```
 
