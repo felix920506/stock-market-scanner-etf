@@ -1,0 +1,11 @@
+{
+  "signal_separator": "、",
+  "signals": {
+    "macd_hist_positive": "MACD 柱狀體為正",
+    "rsi_healthy": "RSI 處於健康區間 ({rsi})",
+    "stoch_bullish": "隨機指標看漲",
+    "obv_rising": "OBV 上升",
+    "volume_surge": "成交量放大 {ratio}×",
+    "default": "技術面維持偏多"
+  }
+}

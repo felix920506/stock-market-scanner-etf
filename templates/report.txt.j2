@@ -1,0 +1,42 @@
+📡 市場新機會掃描報告
+{{ scan_date }} · 分析 {{ analyzed }} 檔候選股票
+
+━━━━━━━━━━━━━━━━━━━━━━
+🏆 強力機會
+━━━━━━━━━━━━━━━━━━━━━━
+
+{% if strong_buys %}
+{% for item in strong_buys %}
+🟢 {{ item.ticker }} {{ item.name }} [{{ item.label }}] 分數: {{ item.score }}/8 · 來源: {{ item.source }}
+現價: ${{ item.price }} ({{ item.change }})
+RSI: {{ item.rsi }} | Stoch K{{ item.stoch_k }}/D{{ item.stoch_d }} | 成交量: {{ item.vol_ratio ~ '×均量' if item.vol_ratio else '?' }}
+✅ {{ item.signal_summary }}
+支撐: {{ item.support }}  阻力: {{ item.resistance }}
+{% if item.news %}
+📰 {{ item.news }}
+{% endif %}
+{% if item.recommendation_count %}
+🔁 已連續推薦 {{ item.recommendation_count }} 次
+{% endif %}
+
+{% endfor %}
+{% else %}
+本次沒有達到 STRONG BUY 門檻的標的。
+
+{% endif %}
+━━━━━━━━━━━━━━━━━━━━━━
+👀 值得關注
+━━━━━━━━━━━━━━━━━━━━━━
+
+{% if buys %}
+{% for item in buys %}
+🟡 {{ item.ticker }} {{ item.name }} [{{ item.label }}] 分數: {{ item.score }}/8 · ${{ item.price }} ({{ item.change }}) RSI {{ item.rsi }}
+{{ item.signal_summary }}
+
+{% endfor %}
+{% else %}
+本次沒有達到 BUY 門檻的標的。
+
+{% endif %}
+━━━━━━━━━━━━━━━━━━━━━━
+*本報告僅供參考，非投資建議。來源：市場篩選器 + ETF 持倉。*

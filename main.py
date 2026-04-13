@@ -8,6 +8,9 @@ import tempfile
 import urllib.request
 import urllib.error
 from datetime import datetime
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 # ── Load .env if present ──────────────────────────────────────────────────────
 try:
@@ -16,14 +19,16 @@ try:
 except ImportError:
     pass
 
-from scan_market import scan
-
-
 def read_market_webhook_url() -> str:
     url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not url:
         raise RuntimeError("DISCORD_WEBHOOK_URL not set. Add it to .env or export it.")
     return url
+
+
+def load_scan():
+    from scan_market import scan
+    return scan
 
 
 def send_discord_chunk(webhook_url: str, content: str) -> str:
@@ -66,11 +71,23 @@ def fmt_num(v):
     return f"{v:.0f}" if isinstance(v, (int, float)) else str(v)
 
 
-def fmt_signal_summary(r: dict) -> str:
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATE_DIR = BASE_DIR / 'templates'
+REPORT_TEMPLATE_NAME = 'report.txt.j2'
+REPORT_STRINGS_NAME = 'report_strings.json'
+
+
+def load_report_strings() -> dict:
+    with open(TEMPLATE_DIR / REPORT_STRINGS_NAME, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def fmt_signal_summary(r: dict, text: dict) -> str:
     signals = []
     trend = r.get('trend', {}) or {}
     momentum = r.get('momentum', {}) or {}
     volume = r.get('volume', {}) or {}
+    signal_text = text['signals']
 
     macd_hist = trend.get('macd_hist')
     rsi14 = momentum.get('rsi14')
@@ -80,16 +97,79 @@ def fmt_signal_summary(r: dict) -> str:
     vol_ratio = volume.get('ratio')
 
     if isinstance(macd_hist, (int, float)) and macd_hist > 0:
-        signals.append('MACD 柱狀體為正')
+        signals.append(signal_text['macd_hist_positive'])
     if isinstance(rsi14, (int, float)) and 40 <= rsi14 <= 70:
-        signals.append(f"RSI 處於健康區間 ({fmt_num(rsi14)})")
+        signals.append(signal_text['rsi_healthy'].format(rsi=fmt_num(rsi14)))
     if isinstance(stoch_k, (int, float)) and isinstance(stoch_d, (int, float)) and stoch_k > stoch_d:
-        signals.append('隨機指標看漲')
+        signals.append(signal_text['stoch_bullish'])
     if (obv_trend or '').lower() == 'rising':
-        signals.append('OBV 上升')
+        signals.append(signal_text['obv_rising'])
     if isinstance(vol_ratio, (int, float)) and vol_ratio > 1.5:
-        signals.append(f"成交量放大 {vol_ratio:.1f}×")
-    return '、'.join(signals[:2]) if signals else '技術面維持偏多'
+        signals.append(signal_text['volume_surge'].format(ratio=f'{vol_ratio:.1f}'))
+    return text['signal_separator'].join(signals[:2]) if signals else signal_text['default']
+
+
+def prepare_strong_buy_item(r: dict, text: dict) -> dict:
+    ticker = r.get('ticker', '?')
+    name = r.get('name') or ticker
+    price_info = r.get('price', {}) or {}
+    momentum = r.get('momentum', {}) or {}
+    volume = r.get('volume', {}) or {}
+    levels = r.get('levels', {}) or {}
+    vol_ratio = volume.get('ratio')
+
+    return {
+        'ticker': ticker,
+        'name': name,
+        'label': r.get('label', 'STRONG BUY'),
+        'score': r.get('score', '?'),
+        'source': r.get('source', 'unknown'),
+        'price': fmt_price(price_info.get('current')),
+        'change': fmt_pct(price_info.get('change_1d_pct')),
+        'rsi': fmt_num(momentum.get('rsi14')),
+        'stoch_k': fmt_num(momentum.get('stoch_k')),
+        'stoch_d': fmt_num(momentum.get('stoch_d')),
+        'vol_ratio': None if vol_ratio is None else f'{vol_ratio:.1f}',
+        'support': fmt_price(levels.get('S1')),
+        'resistance': fmt_price(levels.get('R1')),
+        'signal_summary': fmt_signal_summary(r, text),
+        'news': (r.get('news_summary') or '').strip(),
+        'recommendation_count': r.get('times_recommended', 0) if r.get('previously_recommended') else 0,
+    }
+
+
+def prepare_buy_item(r: dict, text: dict) -> dict:
+    ticker = r.get('ticker', '?')
+    name = r.get('name') or ticker
+    price_info = r.get('price', {}) or {}
+    momentum = r.get('momentum', {}) or {}
+
+    return {
+        'ticker': ticker,
+        'name': name,
+        'label': r.get('label', 'BUY'),
+        'score': r.get('score', '?'),
+        'price': fmt_price(price_info.get('current')),
+        'change': fmt_pct(price_info.get('change_1d_pct')),
+        'rsi': fmt_num(momentum.get('rsi14')),
+        'signal_summary': fmt_signal_summary(r, text),
+    }
+
+
+def report_template_env() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(TEMPLATE_DIR),
+        autoescape=False,
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+    )
+
+
+def render_report_template(context: dict) -> str:
+    template = report_template_env().get_template(REPORT_TEMPLATE_NAME)
+    return template.render(context).strip() + '\n'
 
 
 def _split_hard(text: str, limit: int) -> list[str]:
@@ -170,80 +250,16 @@ def build_report(scan_output: dict) -> str:
     scan_date = scan_output.get('scan_date', datetime.now().strftime('%Y-%m-%d'))
     analyzed = scan_output.get('candidates_analyzed', 0)
     results = scan_output.get('results', [])
+    text = load_report_strings()
     strong_buys = [r for r in results if r.get('score', 0) >= 6]
     buys = [r for r in results if 3 <= r.get('score', 0) < 6]
 
-    lines = []
-    lines.append('📡 市場新機會掃描報告')
-    lines.append(f'{scan_date} · 分析 {analyzed} 檔候選股票')
-    lines.append('')
-    lines.append('━━━━━━━━━━━━━━━━━━━━━━')
-    lines.append('🏆 強力機會')
-    lines.append('━━━━━━━━━━━━━━━━━━━━━━')
-    lines.append('')
-
-    if strong_buys:
-        for r in strong_buys:
-            ticker = r.get('ticker', '?')
-            name = r.get('name') or ticker
-            label = r.get('label', 'STRONG BUY')
-            source = r.get('source', 'unknown')
-            price_info = r.get('price', {}) or {}
-            momentum = r.get('momentum', {}) or {}
-            volume = r.get('volume', {}) or {}
-            levels = r.get('levels', {}) or {}
-
-            price = fmt_price(price_info.get('current'))
-            change = fmt_pct(price_info.get('change_1d_pct'))
-            rsi = fmt_num(momentum.get('rsi14'))
-            stoch_k = fmt_num(momentum.get('stoch_k'))
-            stoch_d = fmt_num(momentum.get('stoch_d'))
-            vol_ratio = volume.get('ratio')
-            vol_ratio_txt = '?' if vol_ratio is None else f"{vol_ratio:.1f}×均量"
-            s1 = fmt_price(levels.get('S1'))
-            r1 = fmt_price(levels.get('R1'))
-            lines.append(f'🟢 {ticker} {name} [{label}] 分數: {r.get("score", "?")}/8 · 來源: {source}')
-            lines.append(f'現價: ${price} ({change})')
-            lines.append(f'RSI: {rsi} | Stoch K{stoch_k}/D{stoch_d} | 成交量: {vol_ratio_txt}')
-            lines.append(f'✅ {fmt_signal_summary(r)}')
-            lines.append(f'支撐: {s1}  阻力: {r1}')
-            news = (r.get('news_summary') or '').strip()
-            if news:
-                lines.append(f'📰 {news}')
-            if r.get('previously_recommended'):
-                times = r.get('times_recommended', 0)
-                if times:
-                    lines.append(f'🔁 已連續推薦 {times} 次')
-            lines.append('')
-    else:
-        lines.append('本次沒有達到 STRONG BUY 門檻的標的。')
-        lines.append('')
-
-    lines.append('━━━━━━━━━━━━━━━━━━━━━━')
-    lines.append('👀 值得關注')
-    lines.append('━━━━━━━━━━━━━━━━━━━━━━')
-    lines.append('')
-
-    if buys:
-        for r in buys:
-            ticker = r.get('ticker', '?')
-            name = r.get('name') or ticker
-            label = r.get('label', 'BUY')
-            price_info = r.get('price', {}) or {}
-            momentum = r.get('momentum', {}) or {}
-            price = fmt_price(price_info.get('current'))
-            change = fmt_pct(price_info.get('change_1d_pct'))
-            rsi = fmt_num(momentum.get('rsi14'))
-            lines.append(f'🟡 {ticker} {name} [{label}] 分數: {r.get("score", "?")}/8 · ${price} ({change}) RSI {rsi}')
-            lines.append(fmt_signal_summary(r))
-            lines.append('')
-    else:
-        lines.append('本次沒有達到 BUY 門檻的標的。')
-        lines.append('')
-
-    lines.append('━━━━━━━━━━━━━━━━━━━━━━')
-    lines.append('*本報告僅供參考，非投資建議。來源：市場篩選器 + ETF 持倉。*')
-    return '\n'.join(lines).strip() + '\n'
+    return render_report_template({
+        'scan_date': scan_date,
+        'analyzed': analyzed,
+        'strong_buys': [prepare_strong_buy_item(r, text) for r in strong_buys],
+        'buys': [prepare_buy_item(r, text) for r in buys],
+    })
 
 
 def main():
@@ -268,6 +284,7 @@ def main():
     args = parser.parse_args()
 
     if args.as_json:
+        scan = load_scan()
         scan_output = scan(
             watchlist=args.watchlist,
             top=args.top,
@@ -319,6 +336,7 @@ def main():
                 with open(scan_json, 'r', encoding='utf-8') as f:
                     scan_output = json.load(f)
             else:
+                scan = load_scan()
                 scan_output = scan(
                     watchlist=args.watchlist,
                     top=args.top,
