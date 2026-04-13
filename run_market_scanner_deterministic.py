@@ -36,7 +36,10 @@ def send_discord_chunk(webhook_url: str, content: str, thread_id: str = None) ->
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         webhook_url, data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (market-scanner, 1.0)",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
