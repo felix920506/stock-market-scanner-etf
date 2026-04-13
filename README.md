@@ -1,13 +1,13 @@
 # market-scanner
 
-Scans the Taiwan stock market for technical analysis opportunities and posts a ranked report to a Discord channel.
+Scans the stock market for technical analysis opportunities and posts a ranked report to a Discord channel.
 
-Candidates are sourced from the holdings of 10 Taiwan ETFs covering large-cap, semiconductor, tech, mid/small-cap, and high-dividend names. Each candidate is scored by [stock-ta](../stock-ta) across 8 TA signals and ranked. The top picks are formatted into a report and delivered via Discord webhook.
+Candidates are sourced from the holdings of 10 Taiwan ETFs covering large-cap, semiconductor, tech, mid/small-cap, and high-dividend names. Each candidate is scored by [stock-ta](https://github.com/felix920506/stock-ta) across 8 TA signals and ranked. The top picks are formatted into a report and delivered via Discord webhook.
 
 ## Requirements
 
 - Python 3.12+
-- A running [stock-ta](../stock-ta) server or CLI installation
+- A running [stock-ta](https://github.com/felix920506/stock-ta) server or CLI installation
 - A Discord webhook URL
 
 ```bash
@@ -46,7 +46,7 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
 To start the stock-ta HTTP server:
 
 ```bash
-cd ../stock-ta
+cd https://github.com/felix920506/stock-ta
 python server.py --port 8000
 ```
 
