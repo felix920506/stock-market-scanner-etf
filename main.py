@@ -3,10 +3,8 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -18,8 +16,7 @@ try:
 except ImportError:
     pass
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCAN_SCRIPT = os.path.join(SCRIPT_DIR, 'scan_market.py')
+from scan_market import scan
 
 
 def read_market_webhook_url() -> str:
@@ -278,28 +275,13 @@ def main():
     stage_dir = os.path.join(tmpdir, 'stages')
     os.makedirs(stage_dir, exist_ok=True)
 
-    scan_json = os.path.join(stage_dir, '01-scan-output.json')
-    scan_stderr = os.path.join(stage_dir, '01-scan-stderr.log')
-    report_txt = os.path.join(stage_dir, '02-report.txt')
-    post_stdout = os.path.join(stage_dir, '03-webhook-stdout.log')
-    post_stderr = os.path.join(stage_dir, '03-webhook-stderr.log')
-    meta_json = os.path.join(stage_dir, '00-meta.json')
+    scan_json   = os.path.join(stage_dir, '01-scan-output.json')
+    report_txt  = os.path.join(stage_dir, '02-report.txt')
+    post_log    = os.path.join(stage_dir, '03-webhook.log')
+    meta_json   = os.path.join(stage_dir, '00-meta.json')
 
-    metadata = {
-        'tmpdir': tmpdir,
-        'stage_dir': stage_dir,
-        'created_at': datetime.now().isoformat(),
-        'args': vars(args),
-        'files': {
-            'scan_json': scan_json,
-            'scan_stderr': scan_stderr,
-            'report_txt': report_txt,
-            'post_stdout': post_stdout,
-            'post_stderr': post_stderr,
-        },
-    }
     with open(meta_json, 'w', encoding='utf-8') as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
+        json.dump({'tmpdir': tmpdir, 'created_at': datetime.now().isoformat(), 'args': vars(args)}, f, indent=2)
 
     try:
         if args.delivery_only:
@@ -310,56 +292,23 @@ def main():
             report_chunks = chunk_text(report, limit=2000)
         else:
             if os.path.exists(scan_json):
+                print('Reusing existing scan output.', file=sys.stderr)
                 with open(scan_json, 'r', encoding='utf-8') as f:
                     scan_output = json.load(f)
             else:
-                scan_cmd = [
-                    sys.executable,
-                    SCAN_SCRIPT,
-                    '--watchlist', args.watchlist,
-                    '--top', str(args.top),
-                    '--min-score', str(args.min_score),
-                    '--min-market-cap', str(int(args.min_market_cap)),
-                    '--period', args.period,
-                    '--interval', args.interval,
-                    '--max-candidates', str(args.max_candidates),
-                    '--enrich-news',
-                    '--max-news-articles', str(args.max_news_articles),
-                ]
-
-                # Stream stderr live while capturing stdout for JSON.
-                # Both pipes are drained concurrently to avoid a deadlock:
-                # if stdout fills the pipe buffer the child blocks writing,
-                # and if the parent is blocked reading stderr neither can proceed.
-                scan_proc = subprocess.Popen(
-                    scan_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
+                scan_output = scan(
+                    watchlist=args.watchlist,
+                    top=args.top,
+                    min_score=args.min_score,
+                    min_market_cap=args.min_market_cap,
+                    period=args.period,
+                    interval=args.interval,
+                    max_candidates=args.max_candidates,
+                    enrich_news=True,
+                    max_news_articles=args.max_news_articles,
                 )
-                stderr_lines = []
-
-                def _stream_stderr():
-                    for line in scan_proc.stderr:
-                        sys.stderr.write(line)
-                        sys.stderr.flush()
-                        stderr_lines.append(line)
-
-                stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
-                stderr_thread.start()
-                stdout_data = scan_proc.stdout.read()
-                stderr_thread.join()
-                scan_proc.wait()
-
-                stderr_text = ''.join(stderr_lines)
-                with open(scan_stderr, 'w', encoding='utf-8') as f:
-                    f.write(stderr_text)
-                if scan_proc.returncode != 0:
-                    raise RuntimeError(f'scan_market.py failed with rc={scan_proc.returncode}. Artifacts: {tmpdir}')
-
                 with open(scan_json, 'w', encoding='utf-8') as f:
-                    f.write(stdout_data)
-                scan_output = json.loads(stdout_data)
+                    json.dump(scan_output, f, indent=2, ensure_ascii=False)
 
             if os.path.exists(report_txt):
                 print('Reusing existing report.', file=sys.stderr)
@@ -384,16 +333,14 @@ def main():
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- OK\n{resp_body}')
             except RuntimeError as exc:
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- FAILED\n{exc}')
-                with open(post_stdout, 'w', encoding='utf-8') as f:
+                with open(post_log, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(delivery_logs))
-                open(post_stderr, 'w').close()
                 raise RuntimeError(f'Webhook send failed on chunk {idx}/{len(report_chunks)}: {exc}. Artifacts: {tmpdir}')
 
-        with open(post_stdout, 'w', encoding='utf-8') as f:
+        with open(post_log, 'w', encoding='utf-8') as f:
             f.write('\n'.join(delivery_logs))
-        open(post_stderr, 'w').close()
 
-        print(f'Report posted successfully to Discord webhook in {len(report_chunks)} chunk(s). Artifacts: {tmpdir}')
+        print(f'Report posted successfully to Discord in {len(report_chunks)} chunk(s). Artifacts: {tmpdir}')
     finally:
         if cleanup_tmpdir and os.path.isdir(tmpdir):
             shutil.rmtree(tmpdir)

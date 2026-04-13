@@ -211,41 +211,33 @@ def gather_candidates(max_per_source: int = 30) -> list:
     return candidates
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Market Discovery Scanner")
-    parser.add_argument("--watchlist",      default="market-watchlist.md",
-                        help="Path to watchlist file to exclude (default: market-watchlist.md)")
-    parser.add_argument("--top",            type=int, default=10,
-                        help="Number of top opportunities to return (default: 10)")
-    parser.add_argument("--min-score",      type=int, default=2,
-                        help="Minimum score to include in results (default: 2)")
-    parser.add_argument("--min-market-cap", type=float, default=1e10,
-                        help="Minimum market cap in TWD to include (default: 10B TWD ~300M USD)")
-    parser.add_argument("--period",         default="6mo")
-    parser.add_argument("--interval",       default="1d")
-    parser.add_argument("--max-candidates", type=int, default=80,
-                        help="Max candidates to analyze after dedup/filter (default: 80)")
-    parser.add_argument("--history-path", default=None,
-                        help="Path to recommendation history JSON (default: ~/.openclaw/workspace/data/scanner-history.json)")
-    parser.add_argument("--no-history", action="store_true",
-                        help="Disable history tracking for this run")
-    parser.add_argument("--enrich-news", action="store_true",
-                        help="Run news searches on top picks for recent context (requires headed browser)")
-    parser.add_argument("--no-enrich-news", action="store_true",
-                        help="Explicitly disable news enrichment")
-    parser.add_argument("--no-exclude-watchlist", action="store_true",
-                        help="Include watchlist tickers in analysis instead of excluding them")
-    parser.add_argument("--max-news-articles", type=int, default=5,
-                        help="Max news articles per ticker (default: 5)")
-    args = parser.parse_args()
+def scan(
+    watchlist: str = "market-watchlist.md",
+    top: int = 10,
+    min_score: int = 2,
+    min_market_cap: float = 1e10,
+    period: str = "6mo",
+    interval: str = "1d",
+    max_candidates: int = 80,
+    history_path: str = None,
+    no_history: bool = False,
+    enrich_news: bool = False,
+    no_exclude_watchlist: bool = False,
+    max_news_articles: int = 5,
+) -> dict:
+    """Run the full market scan and return the results dict.
 
+    Returns a dict with keys:
+        scan_date, candidates_analyzed, candidates_skipped_errors,
+        watchlist_excluded, top, min_score_filter, results, all_results_summary
+    """
     # Step 1: load exclusion list
-    if args.no_exclude_watchlist:
-        watchlist = set()
+    if no_exclude_watchlist:
+        exclusions = set()
         print("Watchlist exclusion disabled (--no-exclude-watchlist)", file=sys.stderr)
     else:
-        watchlist = parse_watchlist(args.watchlist)
-        print(f"Watchlist exclusions: {sorted(watchlist)}", file=sys.stderr)
+        exclusions = parse_watchlist(watchlist)
+        print(f"Watchlist exclusions: {sorted(exclusions)}", file=sys.stderr)
 
     # Step 2: gather candidates
     print("\nGathering candidates...", file=sys.stderr)
@@ -257,15 +249,12 @@ def main():
     skipped = []
     for c in candidates:
         t = c["ticker"].upper()
-        # Skip if in watchlist (only when exclusion is enabled)
-        if t in watchlist:
+        if t in exclusions:
             skipped.append(t)
             continue
-        # Keep only TW/TWO market tickers (suffix .TW or .TWO)
         if not (t.endswith(".TW") or t.endswith(".TWO")):
             skipped.append(t)
             continue
-        # Skip obvious non-equity symbols
         if any(x in t for x in ["^", "="]):
             continue
         filtered.append(c)
@@ -278,27 +267,24 @@ def main():
             seen[c["ticker"]] = c["source"]
             deduped.append(c)
 
-    # Cap at max-candidates
-    deduped = deduped[:args.max_candidates]
+    deduped = deduped[:max_candidates]
     print(f"Candidates to analyze: {len(deduped)} (skipped {len(skipped)} from watchlist)", file=sys.stderr)
 
-    # Step 4: run TA on each candidate (using stock-ta's analyze())
+    # Step 4: run TA on each candidate
     results = []
     errors = []
 
     for i, c in enumerate(deduped):
         ticker = c["ticker"]
         print(f"  [{i+1}/{len(deduped)}] Analyzing {ticker} (from {c['source']})...", file=sys.stderr)
-        result = analyze(ticker, args.period, args.interval)
+        result = analyze(ticker, period, interval)
         result["source"] = c["source"]
-        # Carry over the authoritative company name from ETF holdings
         if c.get("name") and not result.get("name"):
             result["name"] = c["name"]
 
         if "error" in result:
             errors.append(result)
         else:
-            # Filter by market cap — fetch via fast_info if not present
             mc = result.get("market_cap")
             if mc is None:
                 try:
@@ -306,7 +292,7 @@ def main():
                     mc = getattr(tk.fast_info, "market_cap", None)
                 except Exception:
                     mc = None
-            if mc is not None and mc < args.min_market_cap:
+            if mc is not None and mc < min_market_cap:
                 errors.append({**result, "error": f"Market cap too small ({mc:.0f})"})
             else:
                 results.append(result)
@@ -316,37 +302,29 @@ def main():
     results.sort(key=lambda x: x["score"], reverse=True)
 
     strong_buy_results = [r for r in results if r["score"] >= 6]
-    buy_results = [r for r in results if 3 <= r["score"] < 6]
-    other_qualified_results = [r for r in results if args.min_score <= r["score"] < 3]
+    buy_results        = [r for r in results if 3 <= r["score"] < 6]
+    other_qualified    = [r for r in results if min_score <= r["score"] < 3]
 
-    # Always include all BUY / STRONG BUY results; only lower-score qualified
-    # results are subject to the generic --top cap.
-    remaining_slots = max(0, args.top - len(strong_buy_results) - len(buy_results))
-    top_results = strong_buy_results + buy_results + other_qualified_results[:remaining_slots]
+    remaining_slots = max(0, top - len(strong_buy_results) - len(buy_results))
+    top_results = strong_buy_results + buy_results + other_qualified[:remaining_slots]
 
     scan_date = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-    # ── History tracking ────────────────────────────────────────────────────────────
+    # ── History tracking ──────────────────────────────────────────────────────
     history_kwargs = {}
-    if args.history_path:
-        history_kwargs["history_path"] = args.history_path
+    if history_path:
+        history_kwargs["history_path"] = history_path
 
-    if not args.no_history:
-        # Annotate results with prior recommendation history BEFORE recording
+    if not no_history:
         top_results = annotate_results(top_results, **history_kwargs)
-
-        # Record all BUY / STRONG BUY results into history, regardless of --top
         qualified = [r for r in results if r["score"] >= 3]
         record_recommendations(qualified, scan_date, **history_kwargs)
         print(f"Recorded {len(qualified)} recommendations to history", file=sys.stderr)
 
-    # ── News enrichment ───────────────────────────────────────────────────────────
-    do_news = args.enrich_news and not args.no_enrich_news
-
-    # Enrich all STRONG BUY picks (score >= 6) with news
+    # ── News enrichment ───────────────────────────────────────────────────────
     enriched_picks = [r for r in top_results if r["score"] >= 6]
 
-    if do_news and enriched_picks:
+    if enrich_news and enriched_picks:
         print(f"\nFetching news summaries for {len(enriched_picks)} STRONG BUY picks...", file=sys.stderr)
         try:
             summaries = fetch_news_summaries(enriched_picks)
@@ -358,13 +336,13 @@ def main():
         except Exception as e:
             print(f"Warning: News enrichment failed: {e}", file=sys.stderr)
 
-    output = {
+    return {
         "scan_date": scan_date,
         "candidates_analyzed": len(results),
         "candidates_skipped_errors": len(errors),
         "watchlist_excluded": len(skipped),
-        "top": args.top,
-        "min_score_filter": args.min_score,
+        "top": top,
+        "min_score_filter": min_score,
         "results": top_results,
         "all_results_summary": [
             {"ticker": r["ticker"], "name": r.get("name"), "score": r["score"], "label": r["label"], "source": r["source"]}
@@ -372,6 +350,37 @@ def main():
         ],
     }
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Market Discovery Scanner")
+    parser.add_argument("--watchlist",           default="market-watchlist.md")
+    parser.add_argument("--top",                 type=int, default=10)
+    parser.add_argument("--min-score",           type=int, default=2)
+    parser.add_argument("--min-market-cap",      type=float, default=1e10)
+    parser.add_argument("--period",              default="6mo")
+    parser.add_argument("--interval",            default="1d")
+    parser.add_argument("--max-candidates",      type=int, default=80)
+    parser.add_argument("--history-path",        default=None)
+    parser.add_argument("--no-history",          action="store_true")
+    parser.add_argument("--enrich-news",         action="store_true")
+    parser.add_argument("--no-exclude-watchlist",action="store_true")
+    parser.add_argument("--max-news-articles",   type=int, default=5)
+    args = parser.parse_args()
+
+    output = scan(
+        watchlist=args.watchlist,
+        top=args.top,
+        min_score=args.min_score,
+        min_market_cap=args.min_market_cap,
+        period=args.period,
+        interval=args.interval,
+        max_candidates=args.max_candidates,
+        history_path=args.history_path,
+        no_history=args.no_history,
+        enrich_news=args.enrich_news,
+        no_exclude_watchlist=args.no_exclude_watchlist,
+        max_news_articles=args.max_news_articles,
+    )
     print(json.dumps(output, indent=2))
 
 
