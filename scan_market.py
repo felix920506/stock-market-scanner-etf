@@ -36,19 +36,44 @@ except ImportError:
 # ── Import recommendation history tracker ─────────────────────────────────────
 from recommendation_history import record_recommendations, annotate_results
 
-# ── Import news enrichment ─────────────────────────────────────────────────
-try:
-    from news_enrichment import enrich_from_scan_results
-    HAS_NEWS_ENRICHMENT = True
-except ImportError:
-    HAS_NEWS_ENRICHMENT = False
+# ── News enrichment stub ─────────────────────────────────────────────────────
 
-# ── Import LLM summarizer (uses dedicated OpenClaw "summarizer" agent) ─────
-try:
-    from llm_summarize import summarize_news_for_ticker
-    HAS_LLM_SUMMARIZE = True
-except ImportError:
-    HAS_LLM_SUMMARIZE = False
+def fetch_news_summaries(picks: list[dict]) -> dict[str, str]:
+    """Fetch a one-line news summary for each ticker from the news enrichment service.
+
+    This is a stub for an external program that has not been built yet.
+    See news-enrichment-interface.md for the full interface specification.
+
+    Args:
+        picks: List of scan result dicts. Only two fields are consumed:
+            - "ticker" (str): yfinance-style symbol, e.g. "2330.TW"
+            - "name"   (str): company display name used as the search term,
+                              e.g. "台積電". May be None; the external program
+                              should fall back to the bare ticker in that case.
+
+    Returns:
+        Dict mapping ticker → news summary string, e.g.:
+            {"2330.TW": "台積電Q2法說會上調毛利率指引，AI需求強勁。"}
+        - The summary should be 1–2 lines of plain text in zh-TW.
+        - Return an empty string for a ticker when no meaningful news was found.
+        - Tickers not present in the returned dict are treated as no-summary.
+
+    Implementation notes for when this is built:
+        1. Search  — for each ticker, run web searches to collect article
+                     titles, URLs, and snippets. Filter out generic stock-quote
+                     pages and keep only actual news articles (max ~5 per ticker).
+        2. Summarize — call an LLM with the collected articles and ask for a
+                       1–2 line zh-TW blurb. Return an empty string when no
+                       material events are found rather than a filler summary.
+
+    Raises:
+        NotImplementedError: always, until the external program is implemented.
+    """
+    raise NotImplementedError(
+        "News enrichment is not yet implemented. "
+        "See news-enrichment-interface.md for the interface spec."
+    )
+
 
 # ── HTTP client for stock-ta ──────────────────────────────────────────────────
 # Connect to the stock-ta HTTP server instead of importing directly.
@@ -276,48 +301,21 @@ def main():
 
     # ── News enrichment ───────────────────────────────────────────────────────────
     do_news = args.enrich_news and not args.no_enrich_news
-    news_data = {}
 
     # Enrich all STRONG BUY picks (score >= 6) with news
     enriched_picks = [r for r in top_results if r["score"] >= 6]
 
-    if do_news and HAS_NEWS_ENRICHMENT and enriched_picks:
-        print(f"\nEnriching {len(enriched_picks)} STRONG BUY picks with recent news...", file=sys.stderr)
+    if do_news and enriched_picks:
+        print(f"\nFetching news summaries for {len(enriched_picks)} STRONG BUY picks...", file=sys.stderr)
         try:
-            news_data = enrich_from_scan_results(
-                enriched_picks,
-                max_articles_per_ticker=args.max_news_articles,
-            )
-            # Attach news articles to enriched results
+            summaries = fetch_news_summaries(enriched_picks)
             for r in enriched_picks:
-                ticker = r["ticker"]
-                if ticker in news_data:
-                    r["recent_news"] = news_data[ticker].get("articles", [])
-            print(f"News enrichment complete for {len(news_data)} tickers", file=sys.stderr)
-
-            # Summarize news using the dedicated summarizer agent (Gemini 3 Flash)
-            if HAS_LLM_SUMMARIZE:
-                print("\nSummarizing news via OpenClaw summarizer agent (Gemini 3 Flash)...", file=sys.stderr)
-                for r in enriched_picks:
-                    ticker = r["ticker"]
-                    articles = r.get("recent_news", [])
-                    if articles:
-                        name = r.get("name") or ticker
-                        summary = summarize_news_for_ticker(
-                            ticker, name, articles,
-                            language="zh-TW",
-                        )
-                        r["news_summary"] = summary
-                    else:
-                        r["news_summary"] = ""
-                print("News summarization complete", file=sys.stderr)
-            else:
-                print("Warning: llm_summarize not available, skipping news summarization", file=sys.stderr)
-
+                r["news_summary"] = summaries.get(r["ticker"], "")
+            print("News enrichment complete.", file=sys.stderr)
+        except NotImplementedError:
+            print("Warning: news enrichment not yet implemented, skipping.", file=sys.stderr)
         except Exception as e:
             print(f"Warning: News enrichment failed: {e}", file=sys.stderr)
-    elif do_news and not HAS_NEWS_ENRICHMENT:
-        print("Warning: --enrich-news requested but news_enrichment module not available", file=sys.stderr)
 
     output = {
         "scan_date": scan_date,
