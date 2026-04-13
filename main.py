@@ -28,11 +28,12 @@ def read_market_webhook_url() -> str:
     return url
 
 
-def send_discord_chunk(webhook_url: str, content: str, thread_id: str = None) -> str:
-    """POST a single content chunk to a Discord webhook. Returns response body."""
+def send_discord_chunk(webhook_url: str, content: str) -> str:
+    """POST a single content chunk to a Discord webhook. Returns response body.
+
+    To post into a thread, append ?thread_id=<id> to the webhook URL.
+    """
     payload = {"content": content}
-    if thread_id:
-        payload["thread_id"] = thread_id
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         webhook_url, data=data,
@@ -348,12 +349,10 @@ def main():
             with open(report_txt, 'w', encoding='utf-8') as f:
                 f.write('\n\n--- chunk separator ---\n\n'.join(report_chunks))
 
-        thread_id = os.environ.get('THREAD_ID') or None
-
         delivery_logs = []
         for idx, chunk in enumerate(report_chunks, 1):
             try:
-                resp_body = send_discord_chunk(webhook_url, chunk, thread_id=thread_id)
+                resp_body = send_discord_chunk(webhook_url, chunk)
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- OK\n{resp_body}')
             except RuntimeError as exc:
                 delivery_logs.append(f'--- chunk {idx}/{len(report_chunks)} --- FAILED\n{exc}')
