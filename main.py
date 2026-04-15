@@ -31,6 +31,14 @@ def load_scan():
     return scan
 
 
+def load_default_market():
+    with open(BASE_DIR / 'etf_sources.json', encoding='utf-8') as f:
+        markets = json.load(f).get('markets', {})
+    if not markets:
+        raise RuntimeError('No markets configured in etf_sources.json')
+    return next(iter(markets))
+
+
 def send_discord_chunk(webhook_url: str, content: str) -> str:
     """POST a single content chunk to a Discord webhook. Returns response body.
 
@@ -263,11 +271,13 @@ def build_report(scan_output: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Market scanner — scans TW market and posts report to Discord')
+    parser = argparse.ArgumentParser(description='Market scanner — scans a configured market and posts report to Discord')
+    default_market = load_default_market()
     parser.add_argument('--top',                  type=int,   default=10,             help='Number of top picks to include (default: 10)')
     parser.add_argument('--min-score',            type=int,   default=3,              help='Minimum TA score to include (default: 3)')
     parser.add_argument('--max-candidates',       type=int,   default=80,             help='Max tickers to analyse (default: 80)')
     parser.add_argument('--min-market-cap',       type=float, default=1e10,           help='Minimum market cap in TWD (default: 10B)')
+    parser.add_argument('--market',               default=default_market,             help=f'Market code from etf_sources.json (default: {default_market})')
     parser.add_argument('--period',               default='6mo',                      help='yfinance data period (default: 6mo)')
     parser.add_argument('--interval',             default='1d',                       help='Bar interval (default: 1d)')
     parser.add_argument('--watchlist',            default='market-watchlist.md',      help='Watchlist file to exclude (default: market-watchlist.md)')
@@ -290,6 +300,7 @@ def main():
             top=args.top,
             min_score=args.min_score,
             min_market_cap=args.min_market_cap,
+            market=args.market,
             period=args.period,
             interval=args.interval,
             max_candidates=args.max_candidates,
@@ -342,6 +353,7 @@ def main():
                     top=args.top,
                     min_score=args.min_score,
                     min_market_cap=args.min_market_cap,
+                    market=args.market,
                     period=args.period,
                     interval=args.interval,
                     max_candidates=args.max_candidates,

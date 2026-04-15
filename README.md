@@ -75,6 +75,7 @@ python3 main.py --json
 | `--min-score N` | 3 | Minimum TA score to include |
 | `--max-candidates N` | 80 | Max tickers to analyse |
 | `--min-market-cap N` | 10B TWD | Minimum market cap filter |
+| `--market CODE` | First market in `etf_sources.json` | Market code to scan |
 | `--period` | `6mo` | yfinance data period (`1mo` `3mo` `6mo` `1y` `2y`) |
 | `--interval` | `1d` | Bar interval (`1d` `1wk` `1mo`) |
 | `--watchlist PATH` | `market-watchlist.md` | Tickers to exclude from results |
@@ -115,7 +116,7 @@ Bonus: +1 for oversold bounce (RSI < 35 and price > EMA50), +1 for volume surge 
 
 ## Candidate sources
 
-Holdings from 10 Taiwan ETFs, deduplicated and filtered to `.TW` / `.TWO` tickers only:
+Holdings are loaded from the selected market in `etf_sources.json`. If `--market` is omitted, the first market defined in that file is used. Taiwan is currently configured with 10 ETFs, deduplicated and filtered to `.TW` / `.TWO` tickers:
 
 | ETF | Focus |
 |---|---|

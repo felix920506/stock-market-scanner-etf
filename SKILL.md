@@ -53,6 +53,7 @@ python3 /home/user/.openclaw/workspace/skills/market-scanner/scripts/scan_market
 | `--top` | 10 | How many top picks to show in the report |
 | `--min-score` | 2 | Minimum TA score to include |
 | `--min-market-cap` | 1B | Filter out micro/penny stocks (in USD) |
+| `--market` | First market in `etf_sources.json` | Market code to scan |
 | `--max-candidates` | 80 | Cap on total tickers to analyze |
 | `--period` | `6mo` | yfinance data period |
 | `--interval` | `1d` | Bar interval |
@@ -66,9 +67,9 @@ python3 /home/user/.openclaw/workspace/skills/market-scanner/scripts/scan_market
 pip install yfinance pandas ta --break-system-packages
 ```
 
-## Candidate Sources (Taiwan Market)
+## Candidate Sources
 
-No yfinance built-in screeners exist for TWSE/OTC, so candidates come entirely from TW ETF top holdings:
+Candidates come from ETF holdings for the selected market in `etf_sources.json`. If `--market` is omitted, the first market defined in that file is used. Taiwan is currently configured with these ETF top holdings:
 
 | ETF | Name | Focus |
 |---|---|---|

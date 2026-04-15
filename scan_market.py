@@ -156,6 +156,37 @@ ETF_SOURCES_CONFIG = _load_etf_sources(_ETF_SOURCES_FILE)
 SCREENER_SOURCES = []  # No screeners available via yfinance
 
 
+def get_default_market() -> str:
+    """Return the first configured market code."""
+    markets = ETF_SOURCES_CONFIG.get("markets", {})
+    if not markets:
+        raise ValueError("No markets configured in etf_sources.json")
+    return next(iter(markets))
+
+
+def get_market_config(market_code: str | None = None) -> tuple[str, dict]:
+    """Return the selected market code and config, defaulting to the first market."""
+    markets = ETF_SOURCES_CONFIG.get("markets", {})
+    selected = market_code or get_default_market()
+    if selected not in markets:
+        available = ", ".join(markets.keys()) or "none"
+        raise ValueError(f"Unknown market '{selected}'. Available markets: {available}")
+    return selected, markets[selected]
+
+
+def _ticker_allowed_for_market(ticker: str, market: dict) -> bool:
+    """Apply optional market-specific yfinance ticker suffix filtering."""
+    ticker = ticker.upper()
+    if any(x in ticker for x in ["^", "="]):
+        return False
+
+    suffixes = market.get("ticker_suffixes")
+    if suffixes is None:
+        return True
+
+    return any(ticker.endswith(suffix.upper()) for suffix in suffixes)
+
+
 def _resolve_yfinance_name(ticker: str, fallback: str | None = None) -> str | None:
     """Return yfinance's display name for a ticker, falling back when unavailable."""
     try:
@@ -183,30 +214,30 @@ def parse_watchlist(path: str) -> set:
     return tickers
 
 
-def gather_candidates(max_per_source: int = 30) -> list:
-    """Gather candidate tickers from ETF holdings across all configured markets."""
+def gather_candidates(market_code: str | None = None, max_per_source: int = 30) -> list:
+    """Gather candidate tickers from ETF holdings for the selected market."""
     candidates = []
     seen = set()
+    selected_market_code, market = get_market_config(market_code)
 
-    for market_code, market in ETF_SOURCES_CONFIG.get("markets", {}).items():
-        etfs = market.get("etfs", [])
-        print(f"\n[{market_code}] {market.get('name', market_code)} — {len(etfs)} ETF(s)", file=sys.stderr)
-        for entry in etfs:
-            etf = entry["ticker"]
-            try:
-                tk = yf.Ticker(etf)
-                holdings_df = tk.funds_data.top_holdings
-                added = 0
-                for s in holdings_df.index:
-                    if s not in seen:
-                        seen.add(s)
-                        name = str(holdings_df.loc[s, "Name"]) if "Name" in holdings_df.columns else None
-                        candidates.append({"ticker": s, "name": name, "source": f"ETF:{etf}", "market": market_code})
-                        added += 1
-                print(f"  [ETF:{etf}] {added} new candidates (total in ETF: {len(holdings_df)})", file=sys.stderr)
-            except Exception as e:
-                print(f"  [ETF:{etf}] ERROR: {e}", file=sys.stderr)
-            time.sleep(0.3)
+    etfs = market.get("etfs", [])
+    print(f"\n[{selected_market_code}] {market.get('name', selected_market_code)} — {len(etfs)} ETF(s)", file=sys.stderr)
+    for entry in etfs:
+        etf = entry["ticker"]
+        try:
+            tk = yf.Ticker(etf)
+            holdings_df = tk.funds_data.top_holdings
+            added = 0
+            for s in holdings_df.index:
+                if s not in seen:
+                    seen.add(s)
+                    name = str(holdings_df.loc[s, "Name"]) if "Name" in holdings_df.columns else None
+                    candidates.append({"ticker": s, "name": name, "source": f"ETF:{etf}", "market": selected_market_code})
+                    added += 1
+            print(f"  [ETF:{etf}] {added} new candidates (total in ETF: {len(holdings_df)})", file=sys.stderr)
+        except Exception as e:
+            print(f"  [ETF:{etf}] ERROR: {e}", file=sys.stderr)
+        time.sleep(0.3)
 
     return candidates
 
@@ -219,6 +250,7 @@ def scan(
     period: str = "6mo",
     interval: str = "1d",
     max_candidates: int = 80,
+    market: str = None,
     history_path: str = None,
     no_history: bool = False,
     enrich_news: bool = False,
@@ -231,6 +263,8 @@ def scan(
         scan_date, candidates_analyzed, candidates_skipped_errors,
         watchlist_excluded, top, min_score_filter, results, all_results_summary
     """
+    selected_market_code, selected_market = get_market_config(market)
+
     # Step 1: load exclusion list
     if no_exclude_watchlist:
         exclusions = set()
@@ -240,13 +274,14 @@ def scan(
         print(f"Watchlist exclusions: {sorted(exclusions)}", file=sys.stderr)
 
     # Step 2: gather candidates
-    print("\nGathering candidates...", file=sys.stderr)
-    candidates = gather_candidates()
+    print(f"\nGathering candidates for market: {selected_market_code}", file=sys.stderr)
+    candidates = gather_candidates(selected_market_code)
     print(f"Total candidates before filter: {len(candidates)}", file=sys.stderr)
 
     # Step 3: filter out watchlist tickers and non-exchange symbols (indices, fx, etc.)
-    # Candidates already come from ETF holdings in etf_sources.json, so exchange
-    # filtering here is just a safety net to drop yfinance artefacts (^INDEX, =X, etc.).
+    # Candidates already come from ETF holdings in etf_sources.json, so market
+    # filtering here is just a safety net to drop yfinance artefacts and symbols
+    # outside the selected market's optional ticker_suffixes rule.
     filtered = []
     skipped = []
     for c in candidates:
@@ -254,10 +289,8 @@ def scan(
         if t in exclusions:
             skipped.append(t)
             continue
-        if not (t.endswith(".TW") or t.endswith(".TWO")):
+        if not _ticker_allowed_for_market(t, selected_market):
             skipped.append(t)
-            continue
-        if any(x in t for x in ["^", "="]):
             continue
         filtered.append(c)
 
@@ -270,7 +303,7 @@ def scan(
             deduped.append(c)
 
     deduped = deduped[:max_candidates]
-    print(f"Candidates to analyze: {len(deduped)} (skipped {len(skipped)} from watchlist)", file=sys.stderr)
+    print(f"Candidates to analyze: {len(deduped)} (skipped {len(skipped)} by filters)", file=sys.stderr)
 
     # Step 4: run TA on each candidate
     results = []
@@ -339,6 +372,7 @@ def scan(
 
     return {
         "scan_date": scan_date,
+        "market": selected_market_code,
         "candidates_analyzed": len(results),
         "candidates_skipped_errors": len(errors),
         "watchlist_excluded": len(skipped),
