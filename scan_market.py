@@ -138,6 +138,7 @@ except ImportError as e:
 # Edit etf_sources.json to add/remove ETFs or markets without touching this file.
 _ETF_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "etf_sources.json")
 
+
 def _load_etf_sources(path: str) -> dict:
     """Load the etf_sources.json file. Returns the parsed dict."""
     try:
@@ -150,8 +151,18 @@ def _load_etf_sources(path: str) -> dict:
         print(f"Warning: Could not parse {path}: {e}", file=sys.stderr)
         return {"markets": {}}
 
+
 ETF_SOURCES_CONFIG = _load_etf_sources(_ETF_SOURCES_FILE)
 SCREENER_SOURCES = []  # No screeners available via yfinance
+
+
+def _resolve_yfinance_name(ticker: str, fallback: str | None = None) -> str | None:
+    """Return yfinance's display name for a ticker, falling back when unavailable."""
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get("longName") or info.get("shortName") or fallback
+    except Exception:
+        return fallback
 
 
 def parse_watchlist(path: str) -> set:
@@ -270,8 +281,7 @@ def scan(
         print(f"  [{i+1}/{len(deduped)}] Analyzing {ticker} (from {c['source']})...", file=sys.stderr)
         result = analyze(ticker, period, interval)
         result["source"] = c["source"]
-        if c.get("name") and not result.get("name"):
-            result["name"] = c["name"]
+        result["name"] = _resolve_yfinance_name(ticker, result.get("name") or c.get("name"))
 
         if "error" in result:
             errors.append(result)
@@ -340,5 +350,3 @@ def scan(
             for r in results
         ],
     }
-
-
