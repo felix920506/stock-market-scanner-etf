@@ -1,3 +1,5 @@
 *.pyc
 .env
 .venv
+data/scanner-history.json
+data/scanner-history.json.tmp

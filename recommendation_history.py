@@ -6,7 +6,9 @@ Tracks which stocks have been recommended previously, when, how often,
 and with what scores. Provides lookup and annotation utilities so the
 scanner can flag repeat recommendations and show score trends.
 
-Storage: a single JSON file (default: ~/.openclaw/workspace/data/scanner-history.json)
+Storage: a single JSON file.
+Default: ./data/scanner-history.json, relative to this project.
+Override with MARKET_SCANNER_HISTORY_PATH or the CLI --history-path flag.
 
 Schema:
 {
@@ -34,15 +36,21 @@ import os
 from datetime import datetime
 from typing import Optional
 
-DEFAULT_HISTORY_PATH = os.path.join(
-    os.path.expanduser("~"), ".openclaw", "workspace", "data", "scanner-history.json"
-)
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_HISTORY_ENV_VAR = "MARKET_SCANNER_HISTORY_PATH"
+DEFAULT_HISTORY_PATH = os.path.join(PROJECT_ROOT, "data", "scanner-history.json")
 
 CURRENT_VERSION = 1
 
 
-def _load(path: str) -> dict:
+def _resolve_history_path(path: Optional[str] = None) -> str:
+    """Return the configured history file path."""
+    return path or os.environ.get(DEFAULT_HISTORY_ENV_VAR) or DEFAULT_HISTORY_PATH
+
+
+def _load(path: Optional[str] = None) -> dict:
     """Load history from disk, creating a fresh structure if absent or empty."""
+    path = _resolve_history_path(path)
     if os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "r") as f:
             data = json.load(f)
@@ -53,9 +61,12 @@ def _load(path: str) -> dict:
     return {"version": CURRENT_VERSION, "tickers": {}}
 
 
-def _save(data: dict, path: str) -> None:
+def _save(data: dict, path: Optional[str] = None) -> None:
     """Atomically write history to disk."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = _resolve_history_path(path)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -65,7 +76,7 @@ def _save(data: dict, path: str) -> None:
 def record_recommendations(
     results: list[dict],
     scan_date: str,
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> dict:
     """
     Record a batch of scan results into history.
@@ -109,7 +120,7 @@ def record_recommendations(
 
 def lookup(
     ticker: str,
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Look up a single ticker's recommendation history.
@@ -150,7 +161,7 @@ def lookup(
 
 def annotate_results(
     results: list[dict],
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> list[dict]:
     """
     Annotate a list of scan results with history info.
@@ -184,7 +195,7 @@ def annotate_results(
 
 
 def get_all_history(
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> dict:
     """Return the full history dict."""
     return _load(history_path)
@@ -192,7 +203,7 @@ def get_all_history(
 
 def get_repeat_tickers(
     min_times: int = 2,
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> list[dict]:
     """
     Get tickers that have been recommended at least `min_times` times.
@@ -221,7 +232,7 @@ def get_repeat_tickers(
 
 def prune_old(
     days: int = 180,
-    history_path: str = DEFAULT_HISTORY_PATH,
+    history_path: Optional[str] = None,
 ) -> int:
     """
     Remove recommendation entries older than `days` days.

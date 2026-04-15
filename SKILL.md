@@ -213,7 +213,7 @@ python3 skills/market-scanner/scripts/news_enrichment.py \
 
 The scanner automatically tracks every stock it recommends across runs.
 
-**Storage:** `~/.openclaw/workspace/data/scanner-history.json`
+**Storage:** `./data/scanner-history.json` by default. Override with `MARKET_SCANNER_HISTORY_PATH` or `--history-path`.
 
 Each scan:
 1. **Annotates** top results with prior history before output (adds `previously_recommended`, `times_recommended`, `first_seen`, `last_seen`, `score_trend`)
@@ -224,7 +224,7 @@ Each scan:
 
 | Argument | Default | Description |
 |---|---|---|
-| `--history-path` | `data/scanner-history.json` | Custom path for the history file |
+| `--history-path` | `data/scanner-history.json` | Custom path for the history file; overrides `MARKET_SCANNER_HISTORY_PATH` |
 | `--no-history` | false | Skip history tracking entirely for this run |
 
 **Programmatic API** (from `recommendation_history.py`):

@@ -272,7 +272,7 @@ def main():
     parser.add_argument('--interval',             default='1d',                       help='Bar interval (default: 1d)')
     parser.add_argument('--watchlist',            default='market-watchlist.md',      help='Watchlist file to exclude (default: market-watchlist.md)')
     parser.add_argument('--no-exclude-watchlist', action='store_true',                help='Include watchlist tickers instead of excluding them')
-    parser.add_argument('--history-path',         default=None,                       help='Custom path for recommendation history JSON')
+    parser.add_argument('--history-path',         default=None,                       help='Custom path for recommendation history JSON (overrides MARKET_SCANNER_HISTORY_PATH)')
     parser.add_argument('--no-history',           action='store_true',                help='Disable history tracking for this run')
     parser.add_argument('--enrich-news',          action='store_true',                help='Fetch news summaries for STRONG BUY picks')
     parser.add_argument('--max-news-articles',    type=int,   default=5,              help='Max news articles per ticker (default: 5)')
