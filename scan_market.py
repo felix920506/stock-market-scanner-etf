@@ -134,25 +134,24 @@ except ImportError as e:
     sys.exit(1)
 
 
-# ── Candidate sources — Taiwan market focused ────────────────────────────────
-# No yfinance built-in screeners for TWSE/OTC, so we rely entirely on TW ETF holdings.
-# ETFs are chosen to cover: large-cap, semiconductors, tech, mid/small-cap, high-dividend.
-# Each ETF contributes its top holdings as discovery candidates.
-SCREENER_SOURCES = []  # No TW screeners available via yfinance
+# ── Candidate sources — loaded from etf_sources.json ─────────────────────────
+# Edit etf_sources.json to add/remove ETFs or markets without touching this file.
+_ETF_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "etf_sources.json")
 
-# TW ETF sources — ordered by breadth/diversity of holdings
-ETF_SOURCES = [
-    "0050.TW",    # 元大台灣50 — top 50 by market cap (broad large-cap)
-    "0056.TW",    # 元大高股息 — high dividend, different mix from 0050
-    "00881.TW",   # 國泰台灣5G+ — tech/telecom/semi focus
-    "00891.TW",   # 中信關鍵半導體 — semiconductor supply chain
-    "00904.TW",   # 新光台灣半導體30 — semiconductor 30
-    "00929.TW",   # 復華台灣科技優息 — tech + yield mix
-    "00912.TW",   # 中信台灣智慧50 — AI/smart tech
-    "00733.TW",   # 富邦台灣中小 — mid/small cap discovery
-    "006208.TW",  # 富邦台灣50 — alternative large-cap coverage
-    "00900.TW",   # 富邦特選高股息30 — value/dividend names
-]
+def _load_etf_sources(path: str) -> dict:
+    """Load the etf_sources.json file. Returns the parsed dict."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Warning: ETF sources file not found at {path}", file=sys.stderr)
+        return {"markets": {}}
+    except json.JSONDecodeError as e:
+        print(f"Warning: Could not parse {path}: {e}", file=sys.stderr)
+        return {"markets": {}}
+
+ETF_SOURCES_CONFIG = _load_etf_sources(_ETF_SOURCES_FILE)
+SCREENER_SOURCES = []  # No screeners available via yfinance
 
 
 def parse_watchlist(path: str) -> set:
@@ -174,26 +173,29 @@ def parse_watchlist(path: str) -> set:
 
 
 def gather_candidates(max_per_source: int = 30) -> list:
-    """Gather candidate tickers from TW ETF holdings."""
+    """Gather candidate tickers from ETF holdings across all configured markets."""
     candidates = []
     seen = set()
 
-    # ETF holdings — primary source for TW market
-    for etf in ETF_SOURCES:
-        try:
-            tk = yf.Ticker(etf)
-            holdings_df = tk.funds_data.top_holdings
-            added = 0
-            for s in holdings_df.index:
-                if s not in seen:
-                    seen.add(s)
-                    name = str(holdings_df.loc[s, "Name"]) if "Name" in holdings_df.columns else None
-                    candidates.append({"ticker": s, "name": name, "source": f"ETF:{etf}"})
-                    added += 1
-            print(f"  [ETF:{etf}] {added} new candidates (total in ETF: {len(holdings_df)})", file=sys.stderr)
-        except Exception as e:
-            print(f"  [ETF:{etf}] ERROR: {e}", file=sys.stderr)
-        time.sleep(0.3)
+    for market_code, market in ETF_SOURCES_CONFIG.get("markets", {}).items():
+        etfs = market.get("etfs", [])
+        print(f"\n[{market_code}] {market.get('name', market_code)} — {len(etfs)} ETF(s)", file=sys.stderr)
+        for entry in etfs:
+            etf = entry["ticker"]
+            try:
+                tk = yf.Ticker(etf)
+                holdings_df = tk.funds_data.top_holdings
+                added = 0
+                for s in holdings_df.index:
+                    if s not in seen:
+                        seen.add(s)
+                        name = str(holdings_df.loc[s, "Name"]) if "Name" in holdings_df.columns else None
+                        candidates.append({"ticker": s, "name": name, "source": f"ETF:{etf}", "market": market_code})
+                        added += 1
+                print(f"  [ETF:{etf}] {added} new candidates (total in ETF: {len(holdings_df)})", file=sys.stderr)
+            except Exception as e:
+                print(f"  [ETF:{etf}] ERROR: {e}", file=sys.stderr)
+            time.sleep(0.3)
 
     return candidates
 
@@ -231,7 +233,9 @@ def scan(
     candidates = gather_candidates()
     print(f"Total candidates before filter: {len(candidates)}", file=sys.stderr)
 
-    # Step 3: filter out watchlist tickers and non-TW symbols
+    # Step 3: filter out watchlist tickers and non-exchange symbols (indices, fx, etc.)
+    # Candidates already come from ETF holdings in etf_sources.json, so exchange
+    # filtering here is just a safety net to drop yfinance artefacts (^INDEX, =X, etc.).
     filtered = []
     skipped = []
     for c in candidates:

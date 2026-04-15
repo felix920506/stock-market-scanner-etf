@@ -1,0 +1,19 @@
+{
+  "markets": {
+    "TW": {
+      "name": "Taiwan (TWSE/OTC)",
+      "etfs": [
+        { "ticker": "0050.TW",   "name": "元大台灣50",         "description": "top 50 by market cap (broad large-cap)" },
+        { "ticker": "0056.TW",   "name": "元大高股息",          "description": "high dividend, different mix from 0050" },
+        { "ticker": "00881.TW",  "name": "國泰台灣5G+",         "description": "tech/telecom/semi focus" },
+        { "ticker": "00891.TW",  "name": "中信關鍵半導體",       "description": "semiconductor supply chain" },
+        { "ticker": "00904.TW",  "name": "新光台灣半導體30",     "description": "semiconductor 30" },
+        { "ticker": "00929.TW",  "name": "復華台灣科技優息",     "description": "tech + yield mix" },
+        { "ticker": "00912.TW",  "name": "中信台灣智慧50",       "description": "AI/smart tech" },
+        { "ticker": "00733.TW",  "name": "富邦台灣中小",         "description": "mid/small cap discovery" },
+        { "ticker": "006208.TW", "name": "富邦台灣50",           "description": "alternative large-cap coverage" },
+        { "ticker": "00900.TW",  "name": "富邦特選高股息30",     "description": "value/dividend names" }
+      ]
+    }
+  }
+}
