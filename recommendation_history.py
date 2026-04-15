@@ -6,71 +6,123 @@ Tracks which stocks have been recommended previously, when, how often,
 and with what scores. Provides lookup and annotation utilities so the
 scanner can flag repeat recommendations and show score trends.
 
-Storage: a single JSON file.
-Default: ./data/scanner-history.json, relative to this project.
+Storage: a SQLite database.
+Default: ./data/scanner-history.sqlite3, relative to this project.
 Override with MARKET_SCANNER_HISTORY_PATH or the CLI --history-path flag.
-
-Schema:
-{
-  "version": 1,
-  "tickers": {
-    "2330.TW": {
-      "name": "台積電",
-      "recommendations": [
-        {
-          "date": "2026-04-06",
-          "score": 6,
-          "label": "STRONG BUY",
-          "source": "ETF:0050.TW"
-        },
-        ...
-      ]
-    },
-    ...
-  }
-}
 """
 
-import json
 import os
-from datetime import datetime
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_HISTORY_ENV_VAR = "MARKET_SCANNER_HISTORY_PATH"
-DEFAULT_HISTORY_PATH = os.path.join(PROJECT_ROOT, "data", "scanner-history.json")
+DEFAULT_HISTORY_PATH = os.path.join(PROJECT_ROOT, "data", "scanner-history.sqlite3")
 
-CURRENT_VERSION = 1
+CURRENT_SCHEMA_VERSION = 1
 
 
 def _resolve_history_path(path: Optional[str] = None) -> str:
-    """Return the configured history file path."""
+    """Return the configured SQLite database path."""
     return path or os.environ.get(DEFAULT_HISTORY_ENV_VAR) or DEFAULT_HISTORY_PATH
 
 
-def _load(path: Optional[str] = None) -> dict:
-    """Load history from disk, creating a fresh structure if absent or empty."""
-    path = _resolve_history_path(path)
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        with open(path, "r") as f:
-            data = json.load(f)
-        # Future-proof: migrate if version changes
-        if data.get("version", 0) < CURRENT_VERSION:
-            data["version"] = CURRENT_VERSION
-        return data
-    return {"version": CURRENT_VERSION, "tickers": {}}
-
-
-def _save(data: dict, path: Optional[str] = None) -> None:
-    """Atomically write history to disk."""
-    path = _resolve_history_path(path)
-    directory = os.path.dirname(path)
+def _connect(path: Optional[str] = None) -> sqlite3.Connection:
+    """Open the history database and ensure the schema exists."""
+    resolved_path = _resolve_history_path(path)
+    directory = os.path.dirname(resolved_path)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+
+    conn = sqlite3.connect(resolved_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    _init_schema(conn)
+    return conn
+
+
+@contextmanager
+def _open_history(path: Optional[str] = None) -> Iterator[sqlite3.Connection]:
+    conn = _connect(path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _init_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS tickers (
+            ticker TEXT PRIMARY KEY,
+            name TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            scan_date TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (ticker) REFERENCES tickers(ticker),
+            UNIQUE (ticker, scan_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_date
+        ON recommendations (ticker, scan_date);
+
+        CREATE INDEX IF NOT EXISTS idx_recommendations_scan_date
+        ON recommendations (scan_date);
+        """
+    )
+    conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+    conn.commit()
+
+
+def _row_to_recommendation(row: sqlite3.Row) -> dict:
+    return {
+        "date": row["scan_date"],
+        "score": row["score"],
+        "label": row["label"],
+        "source": row["source"],
+    }
+
+
+def _lookup_with_connection(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
+    ticker_row = conn.execute(
+        "SELECT ticker, name FROM tickers WHERE ticker = ?",
+        (ticker,),
+    ).fetchone()
+    if ticker_row is None:
+        return None
+
+    rows = conn.execute(
+        """
+        SELECT scan_date, score, label, source
+        FROM recommendations
+        WHERE ticker = ?
+        ORDER BY scan_date
+        """,
+        (ticker,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    recs = [_row_to_recommendation(row) for row in rows]
+    return {
+        "name": ticker_row["name"],
+        "times_recommended": len(recs),
+        "first_seen": recs[0]["date"],
+        "last_seen": recs[-1]["date"],
+        "last_score": recs[-1]["score"],
+        "last_label": recs[-1]["label"],
+        "score_trend": [rec["score"] for rec in recs],
+        "recommendations": recs,
+    }
 
 
 def record_recommendations(
@@ -81,41 +133,42 @@ def record_recommendations(
     """
     Record a batch of scan results into history.
 
-    Args:
-        results: list of result dicts from scan_market.py (must have ticker, score, label, source)
-        scan_date: ISO date string e.g. "2026-04-06"
-        history_path: path to the JSON history file
-
-    Returns:
-        The updated history dict.
+    Duplicate ticker/date entries are ignored so same-day re-runs are idempotent.
+    Returns the full history dict for compatibility with the prior JSON backend.
     """
-    data = _load(history_path)
+    with _open_history(history_path) as conn:
+        for r in results:
+            ticker = r["ticker"]
+            name = r.get("name")
 
-    for r in results:
-        ticker = r["ticker"]
-        entry = {
-            "date": scan_date,
-            "score": r["score"],
-            "label": r["label"],
-            "source": r.get("source", "unknown"),
-        }
+            conn.execute(
+                """
+                INSERT INTO tickers (ticker, name)
+                VALUES (?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    name = COALESCE(tickers.name, excluded.name)
+                """,
+                (ticker, name),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO recommendations (
+                    ticker, scan_date, score, label, source
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    ticker,
+                    scan_date,
+                    r["score"],
+                    r["label"],
+                    r.get("source", "unknown"),
+                ),
+            )
 
-        if ticker not in data["tickers"]:
-            data["tickers"][ticker] = {
-                "name": r.get("name"),
-                "recommendations": [],
-            }
-        elif r.get("name") and not data["tickers"][ticker].get("name"):
-            # backfill name if we didn't have it before
-            data["tickers"][ticker]["name"] = r.get("name")
+        conn.commit()
 
-        # Avoid duplicate entries for the same date (idempotent re-runs)
-        existing_dates = {rec["date"] for rec in data["tickers"][ticker]["recommendations"]}
-        if scan_date not in existing_dates:
-            data["tickers"][ticker]["recommendations"].append(entry)
-
-    _save(data, history_path)
-    return data
+    return get_all_history(history_path)
 
 
 def lookup(
@@ -125,38 +178,11 @@ def lookup(
     """
     Look up a single ticker's recommendation history.
 
-    Returns None if never recommended, otherwise:
-    {
-        "name": "台積電",
-        "times_recommended": 5,
-        "first_seen": "2026-01-15",
-        "last_seen": "2026-04-01",
-        "last_score": 6,
-        "last_label": "STRONG BUY",
-        "score_trend": [4, 5, 6, 5, 6],
-        "recommendations": [...]
-    }
+    Returns None if never recommended, otherwise a summary with score trend
+    and recommendation rows ordered by scan date.
     """
-    data = _load(history_path)
-    if ticker not in data["tickers"]:
-        return None
-
-    info = data["tickers"][ticker]
-    recs = sorted(info["recommendations"], key=lambda r: r["date"])
-
-    if not recs:
-        return None
-
-    return {
-        "name": info.get("name"),
-        "times_recommended": len(recs),
-        "first_seen": recs[0]["date"],
-        "last_seen": recs[-1]["date"],
-        "last_score": recs[-1]["score"],
-        "last_label": recs[-1]["label"],
-        "score_trend": [r["score"] for r in recs],
-        "recommendations": recs,
-    }
+    with _open_history(history_path) as conn:
+        return _lookup_with_connection(conn, ticker)
 
 
 def annotate_results(
@@ -168,28 +194,26 @@ def annotate_results(
 
     Adds to each result dict:
         - "previously_recommended": bool
-        - "times_recommended": int (including this run, if already recorded)
+        - "times_recommended": int
         - "first_seen": date str or None
-        - "last_seen": date str or None (prior to this run)
+        - "last_seen": date str or None
         - "score_trend": list of prior scores
     """
-    data = _load(history_path)
-
-    for r in results:
-        ticker = r["ticker"]
-        if ticker in data["tickers"]:
-            recs = sorted(data["tickers"][ticker]["recommendations"], key=lambda x: x["date"])
-            r["previously_recommended"] = True
-            r["times_recommended"] = len(recs)
-            r["first_seen"] = recs[0]["date"] if recs else None
-            r["last_seen"] = recs[-1]["date"] if recs else None
-            r["score_trend"] = [rec["score"] for rec in recs]
-        else:
-            r["previously_recommended"] = False
-            r["times_recommended"] = 0
-            r["first_seen"] = None
-            r["last_seen"] = None
-            r["score_trend"] = []
+    with _open_history(history_path) as conn:
+        for r in results:
+            history = _lookup_with_connection(conn, r["ticker"])
+            if history:
+                r["previously_recommended"] = True
+                r["times_recommended"] = history["times_recommended"]
+                r["first_seen"] = history["first_seen"]
+                r["last_seen"] = history["last_seen"]
+                r["score_trend"] = history["score_trend"]
+            else:
+                r["previously_recommended"] = False
+                r["times_recommended"] = 0
+                r["first_seen"] = None
+                r["last_seen"] = None
+                r["score_trend"] = []
 
     return results
 
@@ -197,8 +221,32 @@ def annotate_results(
 def get_all_history(
     history_path: Optional[str] = None,
 ) -> dict:
-    """Return the full history dict."""
-    return _load(history_path)
+    """Return the full history dict in the legacy JSON-compatible shape."""
+    with _open_history(history_path) as conn:
+        ticker_rows = conn.execute(
+            "SELECT ticker, name FROM tickers ORDER BY ticker"
+        ).fetchall()
+
+        data = {"version": CURRENT_SCHEMA_VERSION, "tickers": {}}
+        for ticker_row in ticker_rows:
+            rec_rows = conn.execute(
+                """
+                SELECT scan_date, score, label, source
+                FROM recommendations
+                WHERE ticker = ?
+                ORDER BY scan_date
+                """,
+                (ticker_row["ticker"],),
+            ).fetchall()
+            if not rec_rows:
+                continue
+
+            data["tickers"][ticker_row["ticker"]] = {
+                "name": ticker_row["name"],
+                "recommendations": [_row_to_recommendation(row) for row in rec_rows],
+            }
+
+        return data
 
 
 def get_repeat_tickers(
@@ -209,55 +257,54 @@ def get_repeat_tickers(
     Get tickers that have been recommended at least `min_times` times.
     Returns a list sorted by recommendation count descending.
     """
-    data = _load(history_path)
-    repeats = []
+    with _open_history(history_path) as conn:
+        ticker_rows = conn.execute(
+            """
+            SELECT
+                t.ticker,
+                t.name,
+                COUNT(r.id) AS times_recommended,
+                MIN(r.scan_date) AS first_seen,
+                MAX(r.scan_date) AS last_seen
+            FROM tickers t
+            JOIN recommendations r ON r.ticker = t.ticker
+            GROUP BY t.ticker, t.name
+            HAVING COUNT(r.id) >= ?
+            ORDER BY times_recommended DESC, t.ticker
+            """,
+            (min_times,),
+        ).fetchall()
 
-    for ticker, info in data["tickers"].items():
-        recs = info["recommendations"]
-        if len(recs) >= min_times:
-            sorted_recs = sorted(recs, key=lambda r: r["date"])
+        repeats = []
+        for ticker_row in ticker_rows:
+            rec_rows = conn.execute(
+                """
+                SELECT score
+                FROM recommendations
+                WHERE ticker = ?
+                ORDER BY scan_date
+                """,
+                (ticker_row["ticker"],),
+            ).fetchall()
+            last_row = conn.execute(
+                """
+                SELECT score
+                FROM recommendations
+                WHERE ticker = ?
+                ORDER BY scan_date DESC
+                LIMIT 1
+                """,
+                (ticker_row["ticker"],),
+            ).fetchone()
+
             repeats.append({
-                "ticker": ticker,
-                "name": info.get("name"),
-                "times_recommended": len(recs),
-                "first_seen": sorted_recs[0]["date"],
-                "last_seen": sorted_recs[-1]["date"],
-                "last_score": sorted_recs[-1]["score"],
-                "score_trend": [r["score"] for r in sorted_recs],
+                "ticker": ticker_row["ticker"],
+                "name": ticker_row["name"],
+                "times_recommended": ticker_row["times_recommended"],
+                "first_seen": ticker_row["first_seen"],
+                "last_seen": ticker_row["last_seen"],
+                "last_score": last_row["score"],
+                "score_trend": [row["score"] for row in rec_rows],
             })
 
-    repeats.sort(key=lambda x: x["times_recommended"], reverse=True)
-    return repeats
-
-
-def prune_old(
-    days: int = 180,
-    history_path: Optional[str] = None,
-) -> int:
-    """
-    Remove recommendation entries older than `days` days.
-    Removes ticker keys entirely if they have no remaining entries.
-    Returns the number of entries pruned.
-    """
-    data = _load(history_path)
-    cutoff = datetime.now().strftime("%Y-%m-%d")
-    from datetime import timedelta
-    cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-
-    pruned = 0
-    empty_tickers = []
-
-    for ticker, info in data["tickers"].items():
-        before = len(info["recommendations"])
-        info["recommendations"] = [r for r in info["recommendations"] if r["date"] >= cutoff_date]
-        pruned += before - len(info["recommendations"])
-        if not info["recommendations"]:
-            empty_tickers.append(ticker)
-
-    for t in empty_tickers:
-        del data["tickers"][t]
-
-    if pruned > 0:
-        _save(data, history_path)
-
-    return pruned
+        return repeats

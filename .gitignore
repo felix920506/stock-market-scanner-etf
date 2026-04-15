@@ -3,3 +3,6 @@
 .venv
 data/scanner-history.json
 data/scanner-history.json.tmp
+data/*.sqlite3
+data/*.sqlite3-shm
+data/*.sqlite3-wal

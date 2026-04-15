@@ -33,8 +33,8 @@ STOCK_TA=http://localhost:8000
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
 
 # Recommendation history storage
-# Defaults to ./data/scanner-history.json when unset
-MARKET_SCANNER_HISTORY_PATH=./data/scanner-history.json
+# Defaults to ./data/scanner-history.sqlite3 when unset
+MARKET_SCANNER_HISTORY_PATH=./data/scanner-history.sqlite3
 ```
 
 ### stock-ta backend
@@ -80,7 +80,7 @@ python3 main.py --json
 | `--watchlist PATH` | `market-watchlist.md` | Tickers to exclude from results |
 | `--no-exclude-watchlist` | off | Include watchlist tickers instead of excluding them |
 | `--no-history` | off | Disable recommendation history tracking |
-| `--history-path PATH` | `./data/scanner-history.json` | Custom history file path; overrides `MARKET_SCANNER_HISTORY_PATH` |
+| `--history-path PATH` | `./data/scanner-history.sqlite3` | Custom SQLite history database path; overrides `MARKET_SCANNER_HISTORY_PATH` |
 | `--enrich-news` | off | Fetch news summaries for STRONG BUY picks (not yet implemented) |
 | `--json` | off | Print JSON to stdout and exit without posting to Discord |
 | `--keep-temp` | off | Keep run artifact directory after success |

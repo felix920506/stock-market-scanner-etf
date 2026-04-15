@@ -213,18 +213,18 @@ python3 skills/market-scanner/scripts/news_enrichment.py \
 
 The scanner automatically tracks every stock it recommends across runs.
 
-**Storage:** `./data/scanner-history.json` by default. Override with `MARKET_SCANNER_HISTORY_PATH` or `--history-path`.
+**Storage:** `./data/scanner-history.sqlite3` by default. Override with `MARKET_SCANNER_HISTORY_PATH` or `--history-path`.
 
 Each scan:
 1. **Annotates** top results with prior history before output (adds `previously_recommended`, `times_recommended`, `first_seen`, `last_seen`, `score_trend`)
-2. **Records** all qualifying results (≥ min-score) into the history file
+2. **Records** all qualifying results (≥ min-score) into the history database
 3. Deduplicates by date — re-running the same day won't create duplicate entries
 
 **CLI flags:**
 
 | Argument | Default | Description |
 |---|---|---|
-| `--history-path` | `data/scanner-history.json` | Custom path for the history file; overrides `MARKET_SCANNER_HISTORY_PATH` |
+| `--history-path` | `data/scanner-history.sqlite3` | Custom path for the SQLite history database; overrides `MARKET_SCANNER_HISTORY_PATH` |
 | `--no-history` | false | Skip history tracking entirely for this run |
 
 **Programmatic API** (from `recommendation_history.py`):
@@ -235,7 +235,6 @@ from recommendation_history import (
     annotate_results,        # add history fields to result dicts
     lookup,                  # single ticker history lookup
     get_repeat_tickers,      # tickers recommended N+ times
-    prune_old,               # remove entries older than N days
 )
 ```
 
@@ -243,8 +242,6 @@ from recommendation_history import (
 - If a stock has `previously_recommended: true`, mention it in the Discord report (e.g. "已連續推薦 3 次" or "分數趨勢: 4→5→6")
 - Use `score_trend` to show whether momentum is building or fading
 - `get_repeat_tickers(min_times=3)` finds persistent signals worth deeper analysis
-
-**Maintenance:** Run `prune_old(days=180)` periodically to keep the history file lean.
 
 ## Scheduling (Daily Discovery)
 
