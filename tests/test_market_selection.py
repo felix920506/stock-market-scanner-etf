@@ -1,10 +1,5 @@
-import sys
-import types
 import unittest
 from unittest.mock import patch
-
-sys.modules.setdefault("yfinance", types.SimpleNamespace(Ticker=None))
-sys.modules.setdefault("pandas", types.SimpleNamespace(Timestamp=None))
 
 import scan_market
 

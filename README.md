@@ -2,12 +2,11 @@
 
 Scans the stock market for technical analysis opportunities and posts a ranked report to a Discord channel.
 
-Candidates are sourced from the holdings of 10 Taiwan ETFs covering large-cap, semiconductor, tech, mid/small-cap, and high-dividend names. Each candidate is scored by [stock-ta](https://github.com/felix920506/stock-ta) across 8 TA signals and ranked. The top picks are formatted into a report and delivered via Discord webhook.
+Candidates are sourced from the holdings of 10 Taiwan ETFs covering large-cap, semiconductor, tech, mid/small-cap, and high-dividend names. Each candidate is scored locally across 8 TA signals and ranked. The top picks are formatted into a report and delivered via Discord webhook.
 
 ## Requirements
 
 - Python 3.12+
-- A running [stock-ta](https://github.com/felix920506/stock-ta) server or CLI installation
 - A Discord webhook URL
 
 ```bash
@@ -23,11 +22,6 @@ cp .env.example .env
 ```
 
 ```env
-# stock-ta backend — HTTP server or path to CLI script/binary
-STOCK_TA=http://localhost:8000
-# STOCK_TA=/path/to/stock-ta/analyze_stock.py
-# STOCK_TA=/usr/local/bin/stock-ta
-
 # Discord webhook URL
 # To post into a thread, append ?thread_id=<id>
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
@@ -35,22 +29,6 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
 # Recommendation history storage
 # Defaults to ./data/scanner-history.sqlite3 when unset
 MARKET_SCANNER_HISTORY_PATH=./data/scanner-history.sqlite3
-```
-
-### stock-ta backend
-
-`STOCK_TA` is auto-detected from the value:
-
-| Value | Mode |
-|---|---|
-| `http://...` or `https://...` | HTTP server |
-| Path ending in `.py` | Python script (run with current interpreter) |
-| Any other path | Installed binary / entry-point |
-
-To start the stock-ta HTTP server:
-
-```bash
-python server.py --port 8000
 ```
 
 ## Usage
@@ -137,6 +115,7 @@ Holdings are loaded from the selected market in `etf_sources.json`. If `--market
 |---|---|
 | `main.py` | Entry point — CLI, Discord delivery, artifact staging |
 | `scan_market.py` | Core scan logic (`scan()` function) |
+| `technical_analysis.py` | Local yfinance/ta-based technical analysis implementation |
 | `recommendation_history.py` | Tracks prior recommendations to flag repeats |
 | `scoring.md` | Detailed scoring methodology reference |
 | `news-enrichment-interface.md` | Interface spec for the planned news enrichment service |

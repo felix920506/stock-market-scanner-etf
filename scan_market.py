@@ -6,13 +6,9 @@ Core scanning logic. Import and call scan() directly.
 
 import json
 import os
-import subprocess
 import sys
 import time
 import re
-import urllib.request
-import urllib.parse
-import urllib.error
 
 # ── Load .env if present (optional dependency) ────────────────────────────────
 try:
@@ -63,72 +59,10 @@ def fetch_news_summaries(picks: list[dict]) -> dict[str, str]:
     )
 
 
-# ── stock-ta backend ──────────────────────────────────────────────────────────
-# STOCK_TA selects the backend to use for technical analysis.
-# Auto-detected from the value:
-#   http:// or https://  →  HTTP server  (e.g. "http://localhost:8000")
-#   filesystem path      →  CLI process  (e.g. "/path/to/stock-ta/analyze_stock.py"
-#                                          or "/usr/local/bin/stock-ta")
-#
-# .py paths are run with the current Python interpreter; other paths are
-# executed directly (for installed entry-point binaries).
-_STOCK_TA = os.environ.get("STOCK_TA", "http://localhost:8000").strip()
-
-
-def _analyze_http(ticker: str, period: str, interval: str) -> dict:
-    """Call the stock-ta HTTP /analyze endpoint."""
-    base = _STOCK_TA.rstrip("/")
-    params = urllib.parse.urlencode({"ticker": ticker, "period": period, "interval": interval})
-    url = f"{base}/analyze?{params}"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        try:
-            return json.loads(body)
-        except Exception:
-            return {"error": f"HTTP {e.code}: {body[:200]}"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def _analyze_cli(ticker: str, period: str, interval: str) -> dict:
-    """Invoke the stock-ta CLI and parse its JSON output.
-
-    The CLI must accept positional <ticker> and flags --period, --interval,
-    --format json, and write a JSON result dict to stdout. Both .py scripts
-    (run via the current interpreter) and installed binaries are supported.
-    """
-    cmd = (
-        [sys.executable, _STOCK_TA]  # .py script — use current interpreter
-        if _STOCK_TA.endswith(".py")
-        else [_STOCK_TA]             # installed binary / entry-point
-    )
-    cmd += [ticker, "--period", period, "--interval", interval, "--format", "json"]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if proc.returncode != 0:
-            return {"error": proc.stderr.strip() or f"CLI exited with code {proc.returncode}"}
-        return json.loads(proc.stdout)
-    except subprocess.TimeoutExpired:
-        return {"error": "CLI timed out after 60s"}
-    except json.JSONDecodeError:
-        return {"error": f"CLI output was not valid JSON: {proc.stdout[:200]}"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def analyze(ticker: str, period: str = "6mo", interval: str = "1d") -> dict:
-    """Run technical analysis via whichever backend STOCK_TA points to."""
-    if _STOCK_TA.startswith(("http://", "https://")):
-        return _analyze_http(ticker, period, interval)
-    return _analyze_cli(ticker, period, interval)
-
-
 try:
     import yfinance as yf
     import pandas as pd
+    from technical_analysis import analyze
 except ImportError as e:
     print(json.dumps({"error": f"Missing dependency: {e}. Run: pip install -r requirements.txt"}))
     sys.exit(1)
